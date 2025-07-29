@@ -240,6 +240,22 @@ byte ErrorBattery[16][16] = {
         {0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0}
 };
 
+// 電源状態を確認
+int checkPowerStatus() {
+    SYSTEM_POWER_STATUS powerStatus;
+    if (GetSystemPowerStatus(&powerStatus)) {
+        //   0:オフライン
+        //   1:オンライン
+        // 255:不明
+        return powerStatus.ACLineStatus;
+    }
+}
+
+// 電源接続状態を取得する関数
+bool isPowerConnected() {
+    return checkPowerStatus() == 1;
+}
+
 // バッテリー残量を取得する関数
 int getBatteryLevel() {
     SYSTEM_POWER_STATUS status;
@@ -253,10 +269,10 @@ int getBatteryLevel() {
 }
 
 static int currentBatteryLevel = 0;
+static bool currentConnected = false;
 
-
-// バッテリー残量に応じたアイコンを作成する関数
-HICON createBatteryIcon(int batteryLevel) {
+// バッテリー残量，電源接続状態に応じたアイコンを作成する関数
+HICON createBatteryIcon(int batteryLevel, bool isConnected) {
     byte image[16][16] = { 0 };
     if (batteryLevel == 100) {
         for (int i = 0; i < 16; i++) {
@@ -289,10 +305,14 @@ HICON createBatteryIcon(int batteryLevel) {
 
     // 2次元配列を参照して描画
     COLORREF color;
-    if (batteryLevel > 80) color = RGB(0, 255, 0);
-    else if (batteryLevel > 50) color = RGB(255, 255, 255);
-    else if (batteryLevel > 20) color = RGB(255, 143, 63);
-    else color = RGB(255, 0, 0);
+    if (isConnected) color = RGB(0, 255, 255);
+    else {
+        if (batteryLevel > 80) color = RGB(0, 255, 0);
+        else if (batteryLevel > 50) color = RGB(255, 255, 255);
+        else if (batteryLevel > 20) color = RGB(255, 143, 63);
+        else color = RGB(255, 0, 0);
+    }
+
 
     for (int y = 0; y < 16; ++y) {
         for (int x = 0; x < 16; ++x) {
@@ -328,14 +348,16 @@ HICON createBatteryIcon(int batteryLevel) {
 // タスクトレイアイコンを更新する関数
 void updateBatteryIcon() {
     int batteryLevel = getBatteryLevel();
+    bool isConnected = isPowerConnected();
     if (batteryLevel > 100 || batteryLevel < 0) {
         std::cerr << "バッテリ残量取得に失敗しました" << std::endl;
         exit(1);
     }
-    if (batteryLevel != currentBatteryLevel) {
+    if (batteryLevel != currentBatteryLevel || isConnected != currentConnected) {
         currentBatteryLevel = batteryLevel;
+        currentConnected = isConnected;
         if (batteryLevel != -1) {
-            HICON hNewIcon = createBatteryIcon(batteryLevel);
+            HICON hNewIcon = createBatteryIcon(batteryLevel, isConnected);
             if (hIcon) {
                 DestroyIcon(hIcon);
             }
@@ -370,6 +392,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
 // メイン関数
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    // アプリの多重起動防止(RAM上にlockを作成)
+    HANDLE hMutex = CreateMutex(NULL, TRUE, L"Global\\BatteryIconAppMutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        MessageBox(NULL, L"すでにアプリケーションが起動しています。", L"警告", MB_OK | MB_ICONWARNING);
+        return 1;
+    }
+
     const wchar_t CLASS_NAME[] = L"BatteryIconClass";
 
     WNDCLASS wc = {};
@@ -396,5 +425,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         DispatchMessage(&msg);
     }
 
+    // lockを解放
+    if (hMutex) {
+    ReleaseMutex(hMutex);
+    CloseHandle(hMutex);
+    }
+    
     return 0;
 }
